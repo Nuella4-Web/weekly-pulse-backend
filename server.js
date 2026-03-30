@@ -13,7 +13,7 @@ const REDIRECT_URI = 'https://weekly-pulse.onrender.com/callback';
 app.get('/test', (req, res) => res.json({ clientId: CLIENT_ID, hasSecret: !!CLIENT_SECRET }));
 
 app.get('/auth', (req, res) => {
-  const authUrl = `https://auth.atlassian.com/authorize?audience=api.atlassian.com&client_id=${CLIENT_ID}&scope=read%3Ajira-work%20read%3Ajira-user&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&prompt=consent`;
+  const authUrl = `https://auth.atlassian.com/authorize?audience=api.atlassian.com&client_id=${CLIENT_ID}&scope=read%3Ajira-work%20read%3Ajira-user%20read%3Asprint%3Ajira-software&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&prompt=consent`;
   res.redirect(authUrl);
 });
 
