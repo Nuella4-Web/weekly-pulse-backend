@@ -8,7 +8,7 @@ app.use(express.json());
 
 const CLIENT_ID = process.env.JIRA_CLIENT_ID;
 const CLIENT_SECRET = process.env.JIRA_CLIENT_SECRET;
-const REDIRECT_URI = 'https://weekly-pulse.onrender.com/callback';
+const REDIRECT_URI = 'https://weekly-pulse.onrender.com/callback';app.get('/test', (req, res) => res.json({ clientId: CLIENT_ID, hasSecret: !!CLIENT_SECRET }));
 
 // Step 1: Redirect user to Jira login
 app.get('/auth', (req, res) => {
