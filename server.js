@@ -51,7 +51,7 @@ app.get('/jira/issues', async (req, res) => {
     const cloudId = sites[0].id;
 
     const issuesRes = await fetch(
-      `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/search?jql=sprint in openSprints() ORDER BY updated DESC&maxResults=50&fields=summary,status,assignee,description,priority`,
+      `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/search?jql=project%3DSCRUM%20AND%20sprint!%3DEMPTY%20ORDER%20BY%20updated%20DESC&maxResults=50&fields=summary,status,assignee,description,priority`,
       { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } }
     );
 
