@@ -56,20 +56,20 @@ app.get('/jira/issues', async (req, res) => {
 
   try {
     const issuesRes = await fetch(
-      `https://api.atlassian.com/ex/jira/${CLOUD_ID}/rest/api/3/search?jql=ORDER%20BY%20updated%20DESC&maxResults=50&fields=summary,status,description`,
+      `https://api.atlassian.com/ex/jira/${CLOUD_ID}/rest/api/2/search?jql=ORDER%20BY%20updated%20DESC&maxResults=50&fields=summary,status,description`,
       { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } }
     );
 
     const issuesData = await issuesRes.json();
-    console.log('Jira response status:', issuesData.errorMessages || 'OK');
+    console.log('Raw response:', JSON.stringify(issuesData).substring(0, 500));
     const issues = issuesData.issues || [];
 
     const done = issues.filter(i => i.fields.status.name.toLowerCase() === 'done');
     const inProgress = issues.filter(i => i.fields.status.name.toLowerCase() === 'in progress');
     const toDo = issues.filter(i => i.fields.status.name.toLowerCase() === 'to do');
     const blocked = issues.filter(i => {
-      const desc = i.fields.description?.content?.[0]?.content?.[0]?.text || '';
-      return desc.toLowerCase().includes('blocked');
+      const desc = i.fields.description || '';
+      return typeof desc === 'string' && desc.toLowerCase().includes('blocked');
     });
 
     res.json({
