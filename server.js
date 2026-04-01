@@ -12,6 +12,16 @@ const REDIRECT_URI = 'https://weekly-pulse.onrender.com/callback';
 
 app.get('/test', (req, res) => res.json({ clientId: CLIENT_ID, hasSecret: !!CLIENT_SECRET }));
 
+app.get('/debug-jira', async (req, res) => {
+  const token = req.query.token;
+  if (!token) return res.json({ error: 'No token in query' });
+  const sitesRes = await fetch('https://api.atlassian.com/oauth/token/accessible-resources', {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
+  });
+  const sites = await sitesRes.json();
+  res.json(sites);
+});
+
 app.get('/auth', (req, res) => {
   const authUrl = `https://auth.atlassian.com/authorize?audience=api.atlassian.com&client_id=${CLIENT_ID}&scope=read%3Ajira-work%20read%3Ajira-user%20read%3Asprint%3Ajira-software&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&prompt=consent`;
   res.redirect(authUrl);
