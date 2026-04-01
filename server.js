@@ -8,10 +8,11 @@ app.use(express.json());
 
 const CLIENT_ID = process.env.JIRA_CLIENT_ID;
 const CLIENT_SECRET = process.env.JIRA_CLIENT_SECRET;
+const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 const REDIRECT_URI = 'https://weekly-pulse.onrender.com/callback';
 const CLOUD_ID = '85ac1498-4a4c-49a5-a04f-22069874b42a';
 
-app.get('/test', (req, res) => res.json({ clientId: CLIENT_ID, hasSecret: !!CLIENT_SECRET }));
+app.get('/test', (req, res) => res.json({ clientId: CLIENT_ID, hasSecret: !!CLIENT_SECRET, hasAnthropicKey: !!ANTHROPIC_KEY }));
 
 app.get('/debug-jira', async (req, res) => {
   const token = req.query.token;
@@ -82,6 +83,29 @@ app.get('/jira/issues', async (req, res) => {
 
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch issues', details: err.message });
+  }
+});
+
+app.post('/generate', async (req, res) => {
+  try {
+    const { prompt } = req.body;
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'Generation failed', details: err.message });
   }
 });
 
