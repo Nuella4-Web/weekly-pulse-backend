@@ -51,13 +51,11 @@ app.get('/jira/issues', async (req, res) => {
     const cloudId = sites[0].id;
 
     const issuesRes = await fetch(
-      `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/search?jql=project%3D%22SCRUM%22%20ORDER%20BY%20updated%20DESC&maxResults=50&fields=summary,status,description`,
+      `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/latest/search?jql=project%3D%22SCRUM%22%20ORDER%20BY%20updated%20DESC&maxResults=50&fields=summary,status,description`,
       { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } }
     );
 
     const issuesData = await issuesRes.json();
-    console.log('Raw Jira response:', JSON.stringify(issuesData));
-    
     const issues = issuesData.issues || [];
 
     const done = issues.filter(i => i.fields.status.name.toLowerCase() === 'done');
@@ -73,8 +71,7 @@ app.get('/jira/issues', async (req, res) => {
       inProgress: inProgress.map(i => i.fields.summary),
       toDo: toDo.map(i => i.fields.summary),
       blocked: blocked.map(i => i.fields.summary),
-      total: issues.length,
-      raw: issuesData
+      total: issues.length
     });
 
   } catch (err) {
