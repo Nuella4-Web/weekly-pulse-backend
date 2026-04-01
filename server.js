@@ -26,14 +26,18 @@ app.get('/', (req, res) => {
 
 // ─── OAuth: Step 1 — Redirect user to Atlassian ──────────
 app.get('/auth', (req, res) => {
-  // Using granular scopes (do NOT mix classic + granular)
+  // Both classic AND granular scopes needed:
+  // Classic scopes = authorize the REST API v2 endpoints
+  // Granular scopes = control data visibility
   const scopes = [
+    'read:jira-work',
+    'read:jira-user',
     'read:issue:jira',
     'read:project:jira',
     'read:issue-details:jira',
     'read:jql:jira',
     'read:sprint:jira-software',
-    'read:board:jira-software',
+    'read:board-scope:jira-software',
     'read:user:jira',
     'offline_access'
   ].join(' ');
