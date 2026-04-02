@@ -10,7 +10,6 @@ const CLIENT_ID = process.env.JIRA_CLIENT_ID;
 const CLIENT_SECRET = process.env.JIRA_CLIENT_SECRET;
 const CALLBACK_URL = 'https://weekly-pulse.onrender.com/callback';
 const FRONTEND_URL = 'https://weekly-pulse-report.netlify.app';
-const CLOUD_ID = '85ac1498-4a4c-49a5-a04f-22069874b42a';
 
 // ─── Middleware ────────────────────────────────────────────
 app.use(cors({
@@ -26,9 +25,6 @@ app.get('/', (req, res) => {
 
 // ─── OAuth: Step 1 — Redirect user to Atlassian ──────────
 app.get('/auth', (req, res) => {
-  // Both classic AND granular scopes needed:
-  // Classic scopes = authorize the REST API v2 endpoints
-  // Granular scopes = control data visibility
   const scopes = [
     'read:jira-work',
     'read:jira-user',
@@ -82,16 +78,31 @@ app.get('/callback', async (req, res) => {
     console.log('Token obtained successfully');
     console.log('Scopes granted:', tokenData.scope);
 
-    // Redirect to frontend with token in URL hash
+    // ── Dynamically resolve the Cloud ID from the token ──
+    let cloudId = null;
+    try {
+      const resourcesRes = await fetch('https://api.atlassian.com/oauth/token/accessible-resources', {
+        headers: {
+          Authorization: `Bearer ${tokenData.access_token}`,
+          Accept: 'application/json'
+        }
+      });
+      const resources = await resourcesRes.json();
+      if (Array.isArray(resources) && resources.length > 0) {
+        cloudId = resources[0].id;
+        console.log('Resolved Cloud ID:', cloudId, '— Site:', resources[0].name);
+      }
+    } catch (e) {
+      console.error('Failed to resolve Cloud ID:', e.message);
+    }
+
     const params = new URLSearchParams({
       access_token: tokenData.access_token,
       token_type: tokenData.token_type || 'Bearer'
     });
 
-    // Include refresh token if available (requires offline_access scope)
-    if (tokenData.refresh_token) {
-      params.append('refresh_token', tokenData.refresh_token);
-    }
+    if (tokenData.refresh_token) params.append('refresh_token', tokenData.refresh_token);
+    if (cloudId) params.append('cloud_id', cloudId);
 
     res.redirect(`${FRONTEND_URL}#${params.toString()}`);
   } catch (err) {
@@ -103,28 +114,56 @@ app.get('/callback', async (req, res) => {
 // ─── Helper: Extract Bearer token from request ────────────
 function getToken(req) {
   const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith('Bearer ')) {
-    return null;
-  }
+  if (!auth || !auth.startsWith('Bearer ')) return null;
   return auth.split(' ')[1];
+}
+
+// ─── Helper: Get Cloud ID from query param or header ──────
+function getCloudId(req) {
+  return req.query.cloud_id || req.headers['x-cloud-id'] || null;
 }
 
 // ─── Jira: Fetch issues (main endpoint) ───────────────────
 app.get('/jira/issues', async (req, res) => {
   const token = getToken(req);
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' });
-  }
+  if (!token) return res.status(401).json({ error: 'No token provided' });
+
+  const cloudId = getCloudId(req);
+  if (!cloudId) return res.status(400).json({ error: 'No cloud_id provided. Pass it as a query param: /jira/issues?cloud_id=YOUR_CLOUD_ID' });
 
   try {
-    console.log('Fetching Jira issues...');
+    console.log('Fetching Jira issues for cloud:', cloudId);
 
-    // Fetch all issues from the project, sorted by update date
-    const jql = encodeURIComponent('project = SCRUM ORDER BY updated DESC');
-    const fields = 'summary,status,description,assignee,priority,created,updated,sprint';
-    const url = `https://api.atlassian.com/ex/jira/${CLOUD_ID}/rest/api/2/search?jql=${jql}&maxResults=50&fields=${fields}`;
+    // ── Step 1: Dynamically fetch the first available project key ──
+    let projectKey = null;
+    const projectsRes = await fetch(
+      `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/2/project`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json'
+        }
+      }
+    );
+    const projects = await projectsRes.json();
 
-    console.log('Request URL:', url);
+    if (Array.isArray(projects) && projects.length > 0) {
+      projectKey = projects[0].key;
+      console.log(`Using project key: ${projectKey} (${projects[0].name})`);
+    } else {
+      console.warn('No projects found — falling back to unfiltered JQL');
+    }
+
+    // ── Step 2: Build JQL scoped to project if found ──
+    const jql = projectKey
+      ? `project = ${projectKey} ORDER BY updated DESC`
+      : 'ORDER BY updated DESC';
+
+    // FIX: sprint data lives in customfield_10020, not 'sprint'
+    const fields = 'summary,status,description,assignee,priority,created,updated,customfield_10020';
+    const url = `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/2/search?jql=${encodeURIComponent(jql)}&maxResults=50&fields=${fields}`;
+
+    console.log('JQL:', jql);
 
     const issuesRes = await fetch(url, {
       headers: {
@@ -135,28 +174,11 @@ app.get('/jira/issues', async (req, res) => {
 
     const issuesData = await issuesRes.json();
     console.log('Total issues found:', issuesData.total);
-    console.log('Raw response preview:', JSON.stringify(issuesData).substring(0, 500));
 
-    // If zero issues, try a broader query as fallback
-    if (issuesData.total === 0) {
-      console.log('Zero issues with project filter. Trying broad query...');
-
-      const fallbackUrl = `https://api.atlassian.com/ex/jira/${CLOUD_ID}/rest/api/2/search?jql=${encodeURIComponent('ORDER BY updated DESC')}&maxResults=50&fields=${fields}`;
-
-      const fallbackRes = await fetch(fallbackUrl, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/json'
-        }
-      });
-
-      const fallbackData = await fallbackRes.json();
-      console.log('Fallback total:', fallbackData.total);
-
-      if (fallbackData.total > 0) {
-        console.log('Fallback found issues — project key might be different');
-        return res.json(categorizeIssues(fallbackData));
-      }
+    // FIX: Catch Jira error responses before they get swallowed
+    if (issuesData.errorMessages?.length || Object.keys(issuesData.errors || {}).length) {
+      console.error('Jira API returned an error:', JSON.stringify(issuesData));
+      return res.status(400).json({ error: 'Jira API error', details: issuesData });
     }
 
     res.json(categorizeIssues(issuesData));
@@ -187,10 +209,11 @@ function categorizeIssues(issuesData) {
         priority: issue.fields.priority?.name || 'None',
         description: issue.fields.description,
         created: issue.fields.created,
-        updated: issue.fields.updated
+        updated: issue.fields.updated,
+        // FIX: correctly mapped from customfield_10020
+        sprint: issue.fields.customfield_10020 || null
       };
 
-      // Categorize based on status category (more reliable than status name)
       if (statusName.includes('block')) {
         blocked.push(item);
       } else if (statusCategory === 'done' || statusName === 'done') {
@@ -198,7 +221,6 @@ function categorizeIssues(issuesData) {
       } else if (statusCategory === 'indeterminate' || statusName === 'in progress' || statusName.includes('progress')) {
         inProgress.push(item);
       } else {
-        // "new" category or anything else goes to To Do
         toDo.push(item);
       }
     });
@@ -216,37 +238,25 @@ function categorizeIssues(issuesData) {
 // ─── Debug: Check accessible resources ────────────────────
 app.get('/debug-jira', async (req, res) => {
   const token = getToken(req);
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' });
-  }
+  if (!token) return res.status(401).json({ error: 'No token provided' });
 
   try {
-    // Check accessible resources
     const resourcesRes = await fetch('https://api.atlassian.com/oauth/token/accessible-resources', {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/json'
-      }
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
     });
     const resources = await resourcesRes.json();
 
-    // Check token scopes
-    const scopeRes = await fetch('https://api.atlassian.com/me', {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/json'
-      }
+    const meRes = await fetch('https://api.atlassian.com/me', {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
     });
-    const me = await scopeRes.json();
+    const me = await meRes.json();
 
     res.json({
       user: me,
       accessibleResources: resources,
-      cloudIdUsed: CLOUD_ID,
-      cloudIdMatch: resources.some(r => r.id === CLOUD_ID)
+      availableCloudIds: Array.isArray(resources) ? resources.map(r => ({ id: r.id, name: r.name })) : []
     });
   } catch (err) {
-    console.error('Debug error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -254,27 +264,18 @@ app.get('/debug-jira', async (req, res) => {
 // ─── Debug: List all projects visible to token ────────────
 app.get('/debug-projects', async (req, res) => {
   const token = getToken(req);
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' });
-  }
+  if (!token) return res.status(401).json({ error: 'No token provided' });
+
+  const cloudId = getCloudId(req);
+  if (!cloudId) return res.status(400).json({ error: 'Pass cloud_id as query param' });
 
   try {
     const response = await fetch(
-      `https://api.atlassian.com/ex/jira/${CLOUD_ID}/rest/api/2/project`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/json'
-        }
-      }
+      `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/2/project`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } }
     );
     const data = await response.json();
-
-    console.log('Projects visible:', JSON.stringify(data).substring(0, 500));
-    res.json({
-      count: Array.isArray(data) ? data.length : 0,
-      projects: data
-    });
+    res.json({ count: Array.isArray(data) ? data.length : 0, projects: data });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -283,19 +284,15 @@ app.get('/debug-projects', async (req, res) => {
 // ─── Debug: Fetch a single issue by key ───────────────────
 app.get('/debug-issue/:issueKey', async (req, res) => {
   const token = getToken(req);
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' });
-  }
+  if (!token) return res.status(401).json({ error: 'No token provided' });
+
+  const cloudId = getCloudId(req);
+  if (!cloudId) return res.status(400).json({ error: 'Pass cloud_id as query param' });
 
   try {
     const response = await fetch(
-      `https://api.atlassian.com/ex/jira/${CLOUD_ID}/rest/api/2/issue/${req.params.issueKey}`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/json'
-        }
-      }
+      `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/2/issue/${req.params.issueKey}`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } }
     );
     const data = await response.json();
     res.json(data);
@@ -307,19 +304,15 @@ app.get('/debug-issue/:issueKey', async (req, res) => {
 // ─── Debug: Check what permissions the token actually has ──
 app.get('/debug-permissions', async (req, res) => {
   const token = getToken(req);
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' });
-  }
+  if (!token) return res.status(401).json({ error: 'No token provided' });
+
+  const cloudId = getCloudId(req);
+  if (!cloudId) return res.status(400).json({ error: 'Pass cloud_id as query param' });
 
   try {
     const response = await fetch(
-      `https://api.atlassian.com/ex/jira/${CLOUD_ID}/rest/api/2/mypermissions?permissions=BROWSE_PROJECTS,READ_PROJECT,VIEW_WORKFLOW_READONLY`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/json'
-        }
-      }
+      `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/2/mypermissions?permissions=BROWSE_PROJECTS,READ_PROJECT,VIEW_WORKFLOW_READONLY`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } }
     );
     const data = await response.json();
     res.json(data);
@@ -333,5 +326,4 @@ app.listen(PORT, () => {
   console.log(`Weekly Pulse backend running on port ${PORT}`);
   console.log(`Frontend: ${FRONTEND_URL}`);
   console.log(`Callback: ${CALLBACK_URL}`);
-  console.log(`Cloud ID: ${CLOUD_ID}`);
 });
