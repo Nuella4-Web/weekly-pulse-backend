@@ -176,9 +176,11 @@ app.get('/jira/issues', async (req, res) => {
     });
 
     const issuesData = await issuesRes.json();
+    console.log('HTTP status:', issuesRes.status);
+    console.log('Raw Jira response:', JSON.stringify(issuesData).substring(0, 800));
     console.log('Total issues found:', issuesData.total);
 
-    // FIX: Catch Jira error responses before they get swallowed
+    // Catch Jira error responses before they get swallowed
     if (issuesData.errorMessages?.length || Object.keys(issuesData.errors || {}).length) {
       console.error('Jira API returned an error:', JSON.stringify(issuesData));
       return res.status(400).json({ error: 'Jira API error', details: issuesData });
