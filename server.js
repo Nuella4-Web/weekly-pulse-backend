@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 const CLIENT_ID = process.env.JIRA_CLIENT_ID;
 const CLIENT_SECRET = process.env.JIRA_CLIENT_SECRET;
 const CALLBACK_URL = 'https://weekly-pulse.onrender.com/callback';
-const FRONTEND_URL = 'https://weekly-pulse-report.netlify.app';
+const FRONTEND_URL = 'https://project-radar.netlify.app';
 
 // ─── Middleware ────────────────────────────────────────────
 app.use(cors({
