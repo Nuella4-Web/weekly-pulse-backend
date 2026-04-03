@@ -159,9 +159,9 @@ app.get('/jira/issues', async (req, res) => {
       ? `project = ${projectKey} ORDER BY updated DESC`
       : 'ORDER BY updated DESC';
 
-    // GET /rest/api/3/issue/search — works with read:jira-work scope
+    // GET /rest/api/3/search/jql — the correct replacement for deprecated api/2/search
     const fields = 'summary,status,description,assignee,priority,created,updated,customfield_10020';
-    const searchUrl = `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/issue/search?jql=${encodeURIComponent(jql)}&maxResults=50&fields=${fields}`;
+    const searchUrl = `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&maxResults=50&fields=${fields}`;
 
     console.log('JQL:', jql);
 
