@@ -324,6 +324,75 @@ app.get('/debug-permissions', async (req, res) => {
   }
 });
 
+// ─── Generate Report via Claude API ──────────────────────
+app.post('/generate-report', async (req, res) => {
+  const { done, blocked, risk, next } = req.body;
+
+  if (!done || !blocked || !risk || !next) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  const prompt = `You are a senior project manager writing a weekly pulse report for a founder or leadership team.
+
+Transform the raw notes into clean, professional report sections. Each section must have:
+1. A clear 2-3 sentence summary of the situation
+2. One interpretive line that explains the business implication — what this means if not addressed, what it signals, or why it matters. Start this line with "→"
+
+Examples of good interpretive lines:
+→ This may delay the onboarding launch by 2-3 days if not resolved before Wednesday.
+→ The team is ahead of schedule — momentum is strong heading into next week.
+→ If the design decision isn't made by Monday, the dev sprint will stall mid-week.
+
+Be direct. Sound like a senior PM. No fluff. Active voice.
+
+Raw inputs:
+PROGRESS MADE: ${done}
+BLOCKERS: ${blocked}
+RISKS & DELAYS: ${risk}
+NEXT PRIORITIES: ${next}
+
+Respond ONLY with valid JSON in this exact format, nothing else:
+{
+  "done": "summary sentences. → interpretive line.",
+  "blocked": "summary sentences. → interpretive line.",
+  "risk": "summary sentences. → interpretive line.",
+  "next": "summary sentences. → interpretive line.",
+  "health": 85
+}
+
+For health: score 0-100. High blockers and risks = lower. Strong completions and clear priorities = higher.`;
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+
+    const data = await response.json();
+
+    if (data.error) {
+      console.error('Claude API error:', data.error);
+      return res.status(500).json({ error: 'Claude API error', details: data.error });
+    }
+
+    const text = data.content[0].text.replace(/```json|```/g, '').trim();
+    const result = JSON.parse(text);
+    res.json(result);
+  } catch (err) {
+    console.error('Generate report error:', err);
+    res.status(500).json({ error: 'Failed to generate report', details: err.message });
+  }
+});
+
 // ─── Start Server ─────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`Weekly Pulse backend running on port ${PORT}`);
