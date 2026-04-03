@@ -229,6 +229,20 @@ function categorizeIssues(issuesData) {
     });
   }
 
+  const STALE_DAYS = 5;
+  const now = new Date();
+
+  function daysSince(dateStr) {
+    return Math.floor((now - new Date(dateStr)) / (1000 * 60 * 60 * 24));
+  }
+
+  // Flag stalled tickets across all active buckets
+  const allActive = [...toDo, ...inProgress, ...blocked];
+  allActive.forEach(item => {
+    item.daysSinceUpdate = daysSince(item.updated);
+    item.stalled = item.daysSinceUpdate >= STALE_DAYS;
+  });
+
   return {
     total: issuesData.total || 0,
     toDo,
