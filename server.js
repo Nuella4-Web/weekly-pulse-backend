@@ -159,17 +159,20 @@ app.get('/jira/issues', async (req, res) => {
       ? `project = ${projectKey} ORDER BY updated DESC`
       : 'ORDER BY updated DESC';
 
-    // FIX: sprint data lives in customfield_10020, not 'sprint'
-    const fields = 'summary,status,description,assignee,priority,created,updated,customfield_10020';
-    const url = `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&maxResults=50&fields=${fields}`;
+    // Use POST to /rest/api/3/issue/search — the stable v3 search endpoint
+    const fields = ['summary', 'status', 'description', 'assignee', 'priority', 'created', 'updated', 'customfield_10020'];
+    const searchUrl = `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/issue/search`;
 
     console.log('JQL:', jql);
 
-    const issuesRes = await fetch(url, {
+    const issuesRes = await fetch(searchUrl, {
+      method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
-        Accept: 'application/json'
-      }
+        Accept: 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ jql, maxResults: 50, fields })
     });
 
     const issuesData = await issuesRes.json();
