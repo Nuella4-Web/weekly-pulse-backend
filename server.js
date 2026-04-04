@@ -339,6 +339,59 @@ app.get('/debug-permissions', async (req, res) => {
 });
 
 // ─── Generate Report via Claude API ──────────────────────
+
+// Step 1: Pure deterministic health score — same input always = same score
+function calculateHealthScore(done, blocked, risk, next) {
+  let score = 85; // baseline
+
+  // Count distinct completed items in progress field (positive signal)
+  const doneText = done.trim();
+  const doneSentences = doneText.split(/[.!?]+/).filter(s => s.trim().length > 5);
+  const progressPoints = Math.min(doneSentences.length * 3, 15);
+  score += progressPoints;
+
+  // Count distinct blockers (highest impact — negative)
+  const blockerText = blocked.trim();
+  const blockerSentences = blockerText.split(/[.!?]+/).filter(s => s.trim().length > 5);
+  // Only deduct if actual blockers are mentioned, not "no blockers"
+  const hasNoBlockers = blockerText.toLowerCase().includes('no blocker') ||
+    blockerText.toLowerCase().includes('none') ||
+    blockerText.toLowerCase().includes('no active');
+  if (!hasNoBlockers) {
+    const blockerDeduction = Math.min(blockerSentences.length * 12, 35);
+    score -= blockerDeduction;
+  }
+
+  // Count distinct risks (medium impact — negative)
+  const riskText = risk.trim();
+  const riskSentences = riskText.split(/[.!?]+/).filter(s => s.trim().length > 5);
+  const hasNoRisks = riskText.toLowerCase().includes('no risk') ||
+    riskText.toLowerCase().includes('none') ||
+    riskText.toLowerCase().includes('no items');
+  if (!hasNoRisks) {
+    const riskDeduction = Math.min(riskSentences.length * 8, 25);
+    score -= riskDeduction;
+  }
+
+  // Next priorities vagueness (low impact — negative)
+  const nextText = next.trim();
+  const nextSentences = nextText.split(/[.!?]+/).filter(s => s.trim().length > 5);
+  if (nextSentences.length < 2) {
+    score -= 10;
+  }
+
+  // Clamp between 10 and 98
+  return Math.max(10, Math.min(98, score));
+}
+
+// Step 2: Derive urgency directly from score — fixed thresholds, never changes
+function deriveUrgency(score) {
+  if (score >= 76) return 'Stable';
+  if (score >= 56) return 'Moderate';
+  if (score >= 40) return 'High';
+  return 'Critical';
+}
+
 app.post('/generate-report', async (req, res) => {
   const { done, blocked, risk, next } = req.body;
 
@@ -346,44 +399,33 @@ app.post('/generate-report', async (req, res) => {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  // Health score is calculated by AI based on context understanding
-  // Urgency and health are enforced to be consistent after AI returns
-  function enforceConsistency(result) {
-    const urgency = (result.urgency || 'Stable').toLowerCase();
-    let health = Math.max(0, Math.min(100, parseInt(result.health) || 75));
+  // Calculate score and urgency FIRST — these never change for same inputs
+  const healthScore = calculateHealthScore(done, blocked, risk, next);
+  const urgency = deriveUrgency(healthScore);
 
-    // Enforce alignment between urgency and health
-    if (urgency === 'critical' && health > 39) health = Math.floor(Math.random() * 15) + 20; // 20-35
-    if (urgency === 'high' && (health < 40 || health > 64)) health = Math.floor(Math.random() * 20) + 40; // 40-60
-    if (urgency === 'moderate' && (health < 55 || health > 79)) health = Math.floor(Math.random() * 20) + 55; // 55-75
-    if (urgency === 'stable' && health < 76) health = Math.floor(Math.random() * 20) + 76; // 76-95
+  console.log('Health score:', healthScore, '| Urgency:', urgency);
 
-    result.health = health;
-    return result;
-  }
+  // Step 3: Build prompt with score and urgency as fixed facts AI must write around
+  const prompt = `You are a senior project manager writing a weekly status report.
 
-  const prompt = `You are a senior project manager writing a weekly status report. Your job is to give real, actionable insight, not repeat what was already said.
+FIXED FACTS — do not change these under any circumstances:
+- Project Health Score: ${healthScore}
+- Urgency Level: ${urgency}
+- These are calculated from the actual project data and are not up for interpretation.
 
-IMPORTANT FORMATTING RULES — follow these strictly:
-- Never use dashes, em dashes, or hyphens to connect sentences. Use full stops or commas instead.
-- Never use the arrow symbol →. Replace it with a new sentence starting with "This means" or "Without action" or similar.
-- Write in plain, professional English. No jargon, no filler words.
+FORMATTING RULES — follow strictly:
+- Never use dashes or em dashes. Use full stops or commas instead.
+- Never use the arrow symbol. Write consequence as a new sentence starting with "This means" or "Without this" or "If unresolved".
+- Write in plain, professional English. No jargon.
 
+YOUR JOB:
 Transform the raw inputs into four clean report sections. Each section must have:
-1. A clear 2-3 sentence summary that adds context, not just rewords the input
-2. One interpretive sentence that states the business consequence if nothing changes. Start this sentence on a new line beginning with "This means" or "Without this" or "If unresolved"
+1. A 2 to 3 sentence summary that adds context, not just rewords the input.
+2. One consequence sentence starting with "This means" or "Without this" or "If unresolved".
 
-Then write a VERDICT. This is the most important part. Read across all four sections and give one honest professional judgment. Identify the single biggest threat to this project right now and exactly what needs to happen to address it. Write this as a senior PM briefing a leadership team. Be direct, specific, and decisive. Do not summarise each section. Draw a conclusion from all of them together. No dashes. No arrows.
+Then write a VERDICT. One paragraph. Read across all four sections and identify the single biggest threat to this project right now and what must happen to address it. The verdict must be consistent with a project health of ${healthScore} and urgency of ${urgency}. If urgency is Critical, the verdict must reflect immediate crisis. If Stable, the verdict must reflect a positive outlook with minor watchpoints. Be direct. No dashes.
 
-Then give an URGENCY rating that is CONSISTENT with your health score. Pick the urgency that matches:
-- If health is 75 or above: urgency must be Stable or Moderate only
-- If health is 50 to 74: urgency must be Moderate or High only
-- If health is below 50: urgency must be High or Critical only
-
-Critical = project outcome is at risk this week without immediate action
-High = significant risk building that must be addressed within days
-Moderate = manageable issues that need attention but are not yet blocking
-Stable = project is moving well with minor items to watch
+Then write one urgency reason sentence that explains why the project is at ${urgency} level.
 
 Raw inputs:
 PROGRESS MADE: ${done}
@@ -391,19 +433,16 @@ BLOCKERS: ${blocked}
 RISKS & DELAYS: ${risk}
 NEXT PRIORITIES: ${next}
 
-Respond ONLY with valid JSON in this exact format, no extra text, no markdown:
+Respond ONLY with valid JSON. No markdown, no extra text:
 {
   "done": "summary. Consequence sentence.",
   "blocked": "summary. Consequence sentence.",
   "risk": "summary. Consequence sentence.",
   "next": "summary. Consequence sentence.",
-  "verdict": "One paragraph. Cross-sectional insight. Specific action required. Written like a senior PM. No dashes.",
-  "urgency": "Critical|High|Moderate|Stable",
-  "urgency_reason": "One sentence explaining why this urgency rating was given. No dashes.",
-  "health": 75
-}
-
-For health: score 0 to 100 based on your full understanding of the situation. Critical issues = 20 to 35. High risk = 40 to 60. Moderate concerns = 55 to 75. Stable progress = 76 to 95. Be honest and consistent with your urgency rating.`;
+  "verdict": "One paragraph consistent with ${urgency} urgency. No dashes.",
+  "urgency": "${urgency}",
+  "urgency_reason": "One sentence. No dashes."
+}`;
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -437,10 +476,31 @@ For health: score 0 to 100 based on your full understanding of the situation. Cr
       result = JSON.parse(text);
     } catch (parseErr) {
       console.error('JSON parse failed. Raw text:', rawText);
-      return res.status(500).json({ error: 'Could not parse AI response. Please try again.', raw: rawText.substring(0, 200) });
+      return res.status(500).json({ error: 'Could not parse AI response. Please try again.' });
     }
 
-    enforceConsistency(result);
+    // Always override with our deterministic values — AI cannot change these
+    result.health = healthScore;
+    result.urgency = urgency;
+
+    // Strip any dashes from all text fields before sending to frontend
+    function cleanDashes(text) {
+      if (!text) return text;
+      return text
+        .replace(/\s*—\s*/g, '. ')   // em dash
+        .replace(/\s*–\s*/g, ', ')   // en dash
+        .replace(/\s*-{2,}\s*/g, '. ') // double hyphen
+        .replace(/\.\s*\./g, '.')    // clean up double full stops
+        .trim();
+    }
+
+    result.done = cleanDashes(result.done);
+    result.blocked = cleanDashes(result.blocked);
+    result.risk = cleanDashes(result.risk);
+    result.next = cleanDashes(result.next);
+    result.verdict = cleanDashes(result.verdict);
+    result.urgency_reason = cleanDashes(result.urgency_reason);
+
     res.json(result);
   } catch (err) {
     console.error('Generate report error:', err.message);
