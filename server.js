@@ -375,7 +375,7 @@ Transform the raw inputs into four clean report sections. Each section must have
 
 Then write a VERDICT. This is the most important part. Read across all four sections and give one honest professional judgment. Identify the single biggest threat to this project right now and exactly what needs to happen to address it. Write this as a senior PM briefing a leadership team. Be direct, specific, and decisive. Do not summarise each section. Draw a conclusion from all of them together. No dashes. No arrows.
 
-Then give an URGENCY rating that is CONSISTENT with the project health score of ${healthScore}:
+Then give an URGENCY rating that is CONSISTENT with your health score. Pick the urgency that matches:
 - If health is 75 or above: urgency must be Stable or Moderate only
 - If health is 50 to 74: urgency must be Moderate or High only
 - If health is below 50: urgency must be High or Critical only
