@@ -381,15 +381,23 @@ app.post('/generate-report', async (req, res) => {
 
   const healthScore = calculateHealth(done, blocked, risk, next);
 
-  const prompt = `You are a senior project manager writing a weekly status report. Your job is to give real, actionable insight — not repeat what was already said.
+  const prompt = `You are a senior project manager writing a weekly status report. Your job is to give real, actionable insight, not repeat what was already said.
+
+IMPORTANT FORMATTING RULES — follow these strictly:
+- Never use dashes, em dashes, or hyphens to connect sentences. Use full stops or commas instead.
+- Never use the arrow symbol →. Replace it with a new sentence starting with "This means" or "Without action" or similar.
+- Write in plain, professional English. No jargon, no filler words.
 
 Transform the raw inputs into four clean report sections. Each section must have:
 1. A clear 2-3 sentence summary that adds context, not just rewords the input
-2. One interpretive line starting with "→" that states the business consequence if nothing changes
+2. One interpretive sentence that states the business consequence if nothing changes. Start this sentence on a new line beginning with "This means" or "Without this" or "If unresolved"
 
-Then write a VERDICT — this is the most important part. Read across all four sections and give one honest professional judgment. Identify the single biggest threat to this project right now and exactly what needs to happen to address it. Write this as a senior PM briefing a founder. Be direct, specific, and decisive. Do not summarise each section. Draw a conclusion from all of them together.
+Then write a VERDICT. This is the most important part. Read across all four sections and give one honest professional judgment. Identify the single biggest threat to this project right now and exactly what needs to happen to address it. Write this as a senior PM briefing a leadership team. Be direct, specific, and decisive. Do not summarise each section. Draw a conclusion from all of them together. No dashes. No arrows.
 
-Then give an URGENCY rating: Critical, High, Moderate, or Stable. With one sentence explaining why.
+Then give an URGENCY rating that is CONSISTENT with the project health score of ${healthScore}:
+- If health is 75 or above: urgency must be Stable or Moderate only
+- If health is 50 to 74: urgency must be Moderate or High only
+- If health is below 50: urgency must be High or Critical only
 
 Critical = project outcome is at risk this week without immediate action
 High = significant risk building that must be addressed within days
@@ -404,13 +412,13 @@ NEXT PRIORITIES: ${next}
 
 Respond ONLY with valid JSON in this exact format, no extra text, no markdown:
 {
-  "done": "summary. → interpretive line.",
-  "blocked": "summary. → interpretive line.",
-  "risk": "summary. → interpretive line.",
-  "next": "summary. → interpretive line.",
-  "verdict": "One paragraph. Cross-sectional insight. Specific action required. Written like a senior PM.",
+  "done": "summary. Consequence sentence.",
+  "blocked": "summary. Consequence sentence.",
+  "risk": "summary. Consequence sentence.",
+  "next": "summary. Consequence sentence.",
+  "verdict": "One paragraph. Cross-sectional insight. Specific action required. Written like a senior PM. No dashes.",
   "urgency": "Critical|High|Moderate|Stable",
-  "urgency_reason": "One sentence explaining why this urgency rating was given."
+  "urgency_reason": "One sentence explaining why this urgency rating was given. No dashes."
 }`;
 
   try {
