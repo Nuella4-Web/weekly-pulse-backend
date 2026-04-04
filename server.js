@@ -415,7 +415,7 @@ For health: score 0 to 100 based on your full understanding of the situation. Cr
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
+        max_tokens: 2000,
         messages: [{ role: 'user', content: prompt }]
       })
     });
@@ -427,12 +427,23 @@ For health: score 0 to 100 based on your full understanding of the situation. Cr
       return res.status(500).json({ error: 'Claude API error', details: data.error });
     }
 
-    const text = data.content[0].text.replace(/```json|```/g, '').trim();
-    const result = JSON.parse(text);
+    const rawText = data.content[0].text;
+    console.log('Raw AI response:', rawText.substring(0, 300));
+
+    const text = rawText.replace(/```json|```/g, '').trim();
+
+    let result;
+    try {
+      result = JSON.parse(text);
+    } catch (parseErr) {
+      console.error('JSON parse failed. Raw text:', rawText);
+      return res.status(500).json({ error: 'Could not parse AI response. Please try again.', raw: rawText.substring(0, 200) });
+    }
+
     enforceConsistency(result);
     res.json(result);
   } catch (err) {
-    console.error('Generate report error:', err);
+    console.error('Generate report error:', err.message);
     res.status(500).json({ error: 'Failed to generate report', details: err.message });
   }
 });
