@@ -346,18 +346,55 @@ app.post('/generate-report', async (req, res) => {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  const prompt = `You are a senior project manager writing a weekly pulse report for a founder or leadership team.
+  // Calculate health score deterministically — no AI guesswork
+  function calculateHealth(done, blocked, risk, next) {
+    let score = 100;
 
-Transform the raw notes into clean, professional report sections. Each section must have:
-1. A clear 2-3 sentence summary of the situation
-2. One interpretive line that explains the business implication — what this means if not addressed, what it signals, or why it matters. Start this line with "→"
+    const blockerKeywords = ['blocked', 'blocking', 'waiting', 'pending', 'stuck', 'unresolved', 'delayed', 'stalled', 'cannot', 'unable'];
+    const riskKeywords = ['risk', 'delay', 'slip', 'push', 'late', 'concern', 'issue', 'problem', 'behind', 'overdue', 'miss'];
+    const positiveKeywords = ['completed', 'shipped', 'closed', 'resolved', 'done', 'finished', 'delivered', 'launched', 'approved', 'signed'];
 
-Examples of good interpretive lines:
-→ This may delay the onboarding launch by 2-3 days if not resolved before Wednesday.
-→ The team is ahead of schedule — momentum is strong heading into next week.
-→ If the design decision isn't made by Monday, the dev sprint will stall mid-week.
+    // Blockers reduce score significantly
+    const blockerText = blocked.toLowerCase();
+    let blockerHits = 0;
+    blockerKeywords.forEach(kw => { if (blockerText.includes(kw)) blockerHits++; });
+    score -= Math.min(blockerHits * 12, 35);
 
-Be direct. Sound like a senior PM. No fluff. Active voice.
+    // Risks reduce score moderately
+    const riskText = risk.toLowerCase();
+    let riskHits = 0;
+    riskKeywords.forEach(kw => { if (riskText.includes(kw)) riskHits++; });
+    score -= Math.min(riskHits * 7, 25);
+
+    // Positive progress boosts score slightly
+    const doneText = done.toLowerCase();
+    let positiveHits = 0;
+    positiveKeywords.forEach(kw => { if (doneText.includes(kw)) positiveHits++; });
+    score += Math.min(positiveHits * 4, 12);
+
+    // Vague next priorities reduce score
+    const nextWords = next.trim().split(/\s+/).length;
+    if (nextWords < 5) score -= 10;
+
+    return Math.max(10, Math.min(100, Math.round(score)));
+  }
+
+  const healthScore = calculateHealth(done, blocked, risk, next);
+
+  const prompt = `You are a senior project manager writing a weekly status report. Your job is to give real, actionable insight — not repeat what was already said.
+
+Transform the raw inputs into four clean report sections. Each section must have:
+1. A clear 2-3 sentence summary that adds context, not just rewords the input
+2. One interpretive line starting with "→" that states the business consequence if nothing changes
+
+Then write a VERDICT — this is the most important part. Read across all four sections and give one honest professional judgment. Identify the single biggest threat to this project right now and exactly what needs to happen to address it. Write this as a senior PM briefing a founder. Be direct, specific, and decisive. Do not summarise each section. Draw a conclusion from all of them together.
+
+Then give an URGENCY rating: Critical, High, Moderate, or Stable. With one sentence explaining why.
+
+Critical = project outcome is at risk this week without immediate action
+High = significant risk building that must be addressed within days
+Moderate = manageable issues that need attention but are not yet blocking
+Stable = project is moving well with minor items to watch
 
 Raw inputs:
 PROGRESS MADE: ${done}
@@ -365,16 +402,16 @@ BLOCKERS: ${blocked}
 RISKS & DELAYS: ${risk}
 NEXT PRIORITIES: ${next}
 
-Respond ONLY with valid JSON in this exact format, nothing else:
+Respond ONLY with valid JSON in this exact format, no extra text, no markdown:
 {
-  "done": "summary sentences. → interpretive line.",
-  "blocked": "summary sentences. → interpretive line.",
-  "risk": "summary sentences. → interpretive line.",
-  "next": "summary sentences. → interpretive line.",
-  "health": 85
-}
-
-For health: score 0-100. High blockers and risks = lower. Strong completions and clear priorities = higher.`;
+  "done": "summary. → interpretive line.",
+  "blocked": "summary. → interpretive line.",
+  "risk": "summary. → interpretive line.",
+  "next": "summary. → interpretive line.",
+  "verdict": "One paragraph. Cross-sectional insight. Specific action required. Written like a senior PM.",
+  "urgency": "Critical|High|Moderate|Stable",
+  "urgency_reason": "One sentence explaining why this urgency rating was given."
+}`;
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -400,6 +437,7 @@ For health: score 0-100. High blockers and risks = lower. Strong completions and
 
     const text = data.content[0].text.replace(/```json|```/g, '').trim();
     const result = JSON.parse(text);
+    result.health = healthScore;
     res.json(result);
   } catch (err) {
     console.error('Generate report error:', err);
