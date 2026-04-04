@@ -346,40 +346,21 @@ app.post('/generate-report', async (req, res) => {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  // Calculate health score deterministically — no AI guesswork
-  function calculateHealth(done, blocked, risk, next) {
-    let score = 100;
+  // Health score is calculated by AI based on context understanding
+  // Urgency and health are enforced to be consistent after AI returns
+  function enforceConsistency(result) {
+    const urgency = (result.urgency || 'Stable').toLowerCase();
+    let health = Math.max(0, Math.min(100, parseInt(result.health) || 75));
 
-    const blockerKeywords = ['blocked', 'blocking', 'waiting', 'pending', 'stuck', 'unresolved', 'delayed', 'stalled', 'cannot', 'unable'];
-    const riskKeywords = ['risk', 'delay', 'slip', 'push', 'late', 'concern', 'issue', 'problem', 'behind', 'overdue', 'miss'];
-    const positiveKeywords = ['completed', 'shipped', 'closed', 'resolved', 'done', 'finished', 'delivered', 'launched', 'approved', 'signed'];
+    // Enforce alignment between urgency and health
+    if (urgency === 'critical' && health > 39) health = Math.floor(Math.random() * 15) + 20; // 20-35
+    if (urgency === 'high' && (health < 40 || health > 64)) health = Math.floor(Math.random() * 20) + 40; // 40-60
+    if (urgency === 'moderate' && (health < 55 || health > 79)) health = Math.floor(Math.random() * 20) + 55; // 55-75
+    if (urgency === 'stable' && health < 76) health = Math.floor(Math.random() * 20) + 76; // 76-95
 
-    // Blockers reduce score significantly
-    const blockerText = blocked.toLowerCase();
-    let blockerHits = 0;
-    blockerKeywords.forEach(kw => { if (blockerText.includes(kw)) blockerHits++; });
-    score -= Math.min(blockerHits * 12, 35);
-
-    // Risks reduce score moderately
-    const riskText = risk.toLowerCase();
-    let riskHits = 0;
-    riskKeywords.forEach(kw => { if (riskText.includes(kw)) riskHits++; });
-    score -= Math.min(riskHits * 7, 25);
-
-    // Positive progress boosts score slightly
-    const doneText = done.toLowerCase();
-    let positiveHits = 0;
-    positiveKeywords.forEach(kw => { if (doneText.includes(kw)) positiveHits++; });
-    score += Math.min(positiveHits * 4, 12);
-
-    // Vague next priorities reduce score
-    const nextWords = next.trim().split(/\s+/).length;
-    if (nextWords < 5) score -= 10;
-
-    return Math.max(10, Math.min(100, Math.round(score)));
+    result.health = health;
+    return result;
   }
-
-  const healthScore = calculateHealth(done, blocked, risk, next);
 
   const prompt = `You are a senior project manager writing a weekly status report. Your job is to give real, actionable insight, not repeat what was already said.
 
@@ -418,8 +399,11 @@ Respond ONLY with valid JSON in this exact format, no extra text, no markdown:
   "next": "summary. Consequence sentence.",
   "verdict": "One paragraph. Cross-sectional insight. Specific action required. Written like a senior PM. No dashes.",
   "urgency": "Critical|High|Moderate|Stable",
-  "urgency_reason": "One sentence explaining why this urgency rating was given. No dashes."
-}`;
+  "urgency_reason": "One sentence explaining why this urgency rating was given. No dashes.",
+  "health": 75
+}
+
+For health: score 0 to 100 based on your full understanding of the situation. Critical issues = 20 to 35. High risk = 40 to 60. Moderate concerns = 55 to 75. Stable progress = 76 to 95. Be honest and consistent with your urgency rating.`;
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -445,11 +429,70 @@ Respond ONLY with valid JSON in this exact format, no extra text, no markdown:
 
     const text = data.content[0].text.replace(/```json|```/g, '').trim();
     const result = JSON.parse(text);
-    result.health = healthScore;
+    enforceConsistency(result);
     res.json(result);
   } catch (err) {
     console.error('Generate report error:', err);
     res.status(500).json({ error: 'Failed to generate report', details: err.message });
+  }
+});
+
+
+// ─── Contact form submission ───────────────────────────────
+app.post('/contact', async (req, res) => {
+  const { name, email, message, reportContext } = req.body;
+
+  if (!name || !email || !message) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  try {
+    const emailBody = `
+New lead from Project Radar
+
+Name: ${name}
+Email: ${email}
+
+Message:
+${message}
+
+Report Context:
+Health Score: ${reportContext?.health || 'N/A'}
+Urgency: ${reportContext?.urgency || 'N/A'}
+
+PM Verdict:
+${reportContext?.verdict || 'N/A'}
+
+---
+Sent from project-radar.netlify.app
+    `.trim();
+
+    const emailRes = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + process.env.RESEND_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from: 'Project Radar <onboarding@resend.dev>',
+        to: 'nuellachukwudi4@gmail.com',
+        subject: 'New lead from Project Radar: ' + name,
+        text: emailBody
+      })
+    });
+
+    const emailData = await emailRes.json();
+
+    if (emailData.id) {
+      console.log('Contact email sent for:', name, email);
+      res.json({ success: true });
+    } else {
+      console.error('Email send failed:', JSON.stringify(emailData));
+      res.status(500).json({ error: 'Email failed to send' });
+    }
+  } catch (err) {
+    console.error('Contact endpoint error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
