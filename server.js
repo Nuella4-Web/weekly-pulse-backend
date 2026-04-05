@@ -393,7 +393,7 @@ function deriveUrgency(score) {
 }
 
 app.post('/generate-report', async (req, res) => {
-  const { done, blocked, risk, next } = req.body;
+  const { done, blocked, risk, next, blockerOwner } = req.body;
 
   if (!done || !blocked || !risk || !next) {
     return res.status(400).json({ error: 'Missing required fields' });
@@ -429,7 +429,7 @@ Then write one urgency reason sentence that explains why the project is at ${urg
 
 Raw inputs:
 PROGRESS MADE: ${done}
-BLOCKERS: ${blocked}
+BLOCKERS: ${blocked}${blockerOwner ? ' (Owner: ' + blockerOwner + ')' : ''}
 RISKS & DELAYS: ${risk}
 NEXT PRIORITIES: ${next}
 
@@ -563,6 +563,157 @@ Sent from project-radar.netlify.app
     }
   } catch (err) {
     console.error('Contact endpoint error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ─── Supabase helper ──────────────────────────────────────
+async function supabaseRequest(path, method, body) {
+  const res = await fetch(process.env.SUPABASE_URL + '/rest/v1/' + path, {
+    method: method || 'GET',
+    headers: {
+      'apikey': process.env.SUPABASE_ANON_KEY,
+      'Authorization': 'Bearer ' + process.env.SUPABASE_ANON_KEY,
+      'Content-Type': 'application/json',
+      'Prefer': method === 'POST' ? 'return=representation' : ''
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error('Supabase error: ' + err);
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+// ─── Save or update user after report generation ──────────
+app.post('/save-user', async (req, res) => {
+  const { email, projectName, healthScore, urgency } = req.body;
+
+  if (!email) return res.status(400).json({ error: 'Email required' });
+
+  try {
+    // Check if user already exists
+    const existing = await supabaseRequest(
+      'radar_users?email=eq.' + encodeURIComponent(email) + '&select=*',
+      'GET'
+    );
+
+    const now = new Date().toISOString();
+
+    if (existing && existing.length > 0) {
+      // Update existing user
+      await supabaseRequest(
+        'radar_users?email=eq.' + encodeURIComponent(email),
+        'PATCH',
+        {
+          project_name: projectName,
+          last_health_score: healthScore,
+          last_urgency: urgency,
+          last_report_date: now
+        }
+      );
+      console.log('Updated user:', email);
+      res.json({ success: true, returning: true, previousScore: existing[0].last_health_score, previousUrgency: existing[0].last_urgency });
+    } else {
+      // New user
+      await supabaseRequest('radar_users', 'POST', {
+        email,
+        project_name: projectName,
+        last_health_score: healthScore,
+        last_urgency: urgency,
+        last_report_date: now,
+        reminder_active: true
+      });
+      console.log('New user saved:', email);
+      res.json({ success: true, returning: false });
+    }
+  } catch (err) {
+    console.error('Save user error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Check if returning user ───────────────────────────────
+app.get('/check-user', async (req, res) => {
+  const { email } = req.query;
+  if (!email) return res.status(400).json({ error: 'Email required' });
+
+  try {
+    const existing = await supabaseRequest(
+      'radar_users?email=eq.' + encodeURIComponent(email) + '&select=*',
+      'GET'
+    );
+
+    if (existing && existing.length > 0) {
+      const user = existing[0];
+      res.json({
+        returning: true,
+        projectName: user.project_name,
+        lastScore: user.last_health_score,
+        lastUrgency: user.last_urgency,
+        lastDate: user.last_report_date
+      });
+    } else {
+      res.json({ returning: false });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Send Friday reminders (called by cron job) ────────────
+app.post('/send-reminders', async (req, res) => {
+  // Simple auth check — only allow calls with a secret key
+  const secret = req.headers['x-reminder-secret'];
+  if (secret !== process.env.REMINDER_SECRET) {
+    return res.status(401).json({ error: 'Unauthorised' });
+  }
+
+  try {
+    const users = await supabaseRequest(
+      'radar_users?reminder_active=eq.true&select=email,project_name,last_health_score,last_urgency',
+      'GET'
+    );
+
+    if (!users || users.length === 0) {
+      return res.json({ sent: 0 });
+    }
+
+    let sent = 0;
+
+    for (const user of users) {
+      const projectLine = user.project_name ? 'Project: ' + user.project_name + '. ' : '';
+      const scoreLine = user.last_health_score ? 'Last week your health score was ' + user.last_health_score + '% (' + user.last_urgency + '). ' : '';
+
+      const emailBody = projectLine + scoreLine + 'Run your weekly radar now and see where things stand this week.';
+
+      try {
+        await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + process.env.RESEND_API_KEY,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            from: 'Project Radar <onboarding@resend.dev>',
+            to: user.email,
+            subject: 'Your weekly radar is ready',
+            text: emailBody + '\n\nRun it here: https://project-radar.netlify.app\n\n---\nTo stop these reminders reply to this email with the word STOP.'
+          })
+        });
+        sent++;
+      } catch (emailErr) {
+        console.error('Failed to send to:', user.email, emailErr.message);
+      }
+    }
+
+    console.log('Reminders sent:', sent);
+    res.json({ sent });
+  } catch (err) {
+    console.error('Send reminders error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
