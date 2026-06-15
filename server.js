@@ -159,7 +159,6 @@ app.get('/jira/issues', async (req, res) => {
       ? `project = ${projectKey} ORDER BY updated DESC`
       : 'ORDER BY updated DESC';
 
-    // GET /rest/api/3/search/jql — the correct replacement for deprecated api/2/search
     const fields = 'summary,status,description,assignee,priority,created,updated,customfield_10020';
     const searchUrl = `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&maxResults=50&fields=${fields}`;
 
@@ -178,7 +177,6 @@ app.get('/jira/issues', async (req, res) => {
     console.log('Raw Jira response:', JSON.stringify(issuesData).substring(0, 800));
     console.log('Total issues found:', issuesData.total);
 
-    // Catch Jira error responses before they get swallowed
     if (issuesData.errorMessages?.length || Object.keys(issuesData.errors || {}).length) {
       console.error('Jira API returned an error:', JSON.stringify(issuesData));
       return res.status(400).json({ error: 'Jira API error', details: issuesData });
@@ -213,7 +211,6 @@ function categorizeIssues(issuesData) {
         description: issue.fields.description,
         created: issue.fields.created,
         updated: issue.fields.updated,
-        // FIX: correctly mapped from customfield_10020
         sprint: issue.fields.customfield_10020 || null
       };
 
@@ -236,7 +233,6 @@ function categorizeIssues(issuesData) {
     return Math.floor((now - new Date(dateStr)) / (1000 * 60 * 60 * 24));
   }
 
-  // Flag stalled tickets across all active buckets
   const allActive = [...toDo, ...inProgress, ...blocked];
   allActive.forEach(item => {
     item.daysSinceUpdate = daysSince(item.updated);
@@ -338,22 +334,19 @@ app.get('/debug-permissions', async (req, res) => {
   }
 });
 
-// ─── Generate Report via Claude API ──────────────────────
+// ─── Generate Report via Gemini API ──────────────────────
 
 // Step 1: Pure deterministic health score — same input always = same score
 function calculateHealthScore(done, blocked, risk, next) {
-  let score = 85; // baseline
+  let score = 85;
 
-  // Count distinct completed items in progress field (positive signal)
   const doneText = done.trim();
   const doneSentences = doneText.split(/[.!?]+/).filter(s => s.trim().length > 5);
   const progressPoints = Math.min(doneSentences.length * 3, 15);
   score += progressPoints;
 
-  // Count distinct blockers (highest impact — negative)
   const blockerText = blocked.trim();
   const blockerSentences = blockerText.split(/[.!?]+/).filter(s => s.trim().length > 5);
-  // Only deduct if actual blockers are mentioned, not "no blockers"
   const hasNoBlockers = blockerText.toLowerCase().includes('no blocker') ||
     blockerText.toLowerCase().includes('none') ||
     blockerText.toLowerCase().includes('no active');
@@ -362,7 +355,6 @@ function calculateHealthScore(done, blocked, risk, next) {
     score -= blockerDeduction;
   }
 
-  // Count distinct risks (medium impact — negative)
   const riskText = risk.trim();
   const riskSentences = riskText.split(/[.!?]+/).filter(s => s.trim().length > 5);
   const hasNoRisks = riskText.toLowerCase().includes('no risk') ||
@@ -373,18 +365,16 @@ function calculateHealthScore(done, blocked, risk, next) {
     score -= riskDeduction;
   }
 
-  // Next priorities vagueness (low impact — negative)
   const nextText = next.trim();
   const nextSentences = nextText.split(/[.!?]+/).filter(s => s.trim().length > 5);
   if (nextSentences.length < 2) {
     score -= 10;
   }
 
-  // Clamp between 10 and 98
   return Math.max(10, Math.min(98, score));
 }
 
-// Step 2: Derive urgency directly from score — fixed thresholds, never changes
+// Step 2: Derive urgency directly from score
 function deriveUrgency(score) {
   if (score >= 76) return 'Stable';
   if (score >= 56) return 'Moderate';
@@ -399,13 +389,11 @@ app.post('/generate-report', async (req, res) => {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  // Calculate score and urgency FIRST — these never change for same inputs
   const healthScore = calculateHealthScore(done, blocked, risk, next);
   const urgency = deriveUrgency(healthScore);
 
   console.log('Health score:', healthScore, '| Urgency:', urgency);
 
-  // Step 3: Build prompt with score and urgency as fixed facts AI must write around
   const prompt = `You are a senior project manager writing a weekly status report.
 
 FIXED FACTS — do not change these under any circumstances:
@@ -445,28 +433,27 @@ Respond ONLY with valid JSON. No markdown, no extra text:
 }`;
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 2000,
-        messages: [{ role: 'user', content: prompt }]
-      })
-    });
+    // ─── Gemini API call (replaces Anthropic) ────────────
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { maxOutputTokens: 2000 }
+        })
+      }
+    );
 
     const data = await response.json();
 
     if (data.error) {
-      console.error('Claude API error:', data.error);
-      return res.status(500).json({ error: 'Claude API error', details: data.error });
+      console.error('Gemini API error:', data.error);
+      return res.status(500).json({ error: 'Gemini API error', details: data.error });
     }
 
-    const rawText = data.content[0].text;
+    const rawText = data.candidates[0].content.parts[0].text;
     console.log('Raw AI response:', rawText.substring(0, 300));
 
     const text = rawText.replace(/```json|```/g, '').trim();
@@ -479,18 +466,17 @@ Respond ONLY with valid JSON. No markdown, no extra text:
       return res.status(500).json({ error: 'Could not parse AI response. Please try again.' });
     }
 
-    // Always override with our deterministic values — AI cannot change these
+    // Always override with our deterministic values
     result.health = healthScore;
     result.urgency = urgency;
 
-    // Strip any dashes from all text fields before sending to frontend
     function cleanDashes(text) {
       if (!text) return text;
       return text
-        .replace(/\s*—\s*/g, '. ')   // em dash
-        .replace(/\s*–\s*/g, ', ')   // en dash
-        .replace(/\s*-{2,}\s*/g, '. ') // double hyphen
-        .replace(/\.\s*\./g, '.')    // clean up double full stops
+        .replace(/\s*—\s*/g, '. ')
+        .replace(/\s*–\s*/g, ', ')
+        .replace(/\s*-{2,}\s*/g, '. ')
+        .replace(/\.\s*\./g, '.')
         .trim();
     }
 
@@ -595,7 +581,6 @@ app.post('/save-user', async (req, res) => {
   if (!email) return res.status(400).json({ error: 'Email required' });
 
   try {
-    // Check if user already exists
     const existing = await supabaseRequest(
       'radar_users?email=eq.' + encodeURIComponent(email) + '&select=*',
       'GET'
@@ -604,7 +589,6 @@ app.post('/save-user', async (req, res) => {
     const now = new Date().toISOString();
 
     if (existing && existing.length > 0) {
-      // Update existing user
       await supabaseRequest(
         'radar_users?email=eq.' + encodeURIComponent(email),
         'PATCH',
@@ -618,7 +602,6 @@ app.post('/save-user', async (req, res) => {
       console.log('Updated user:', email);
       res.json({ success: true, returning: true, previousScore: existing[0].last_health_score, previousUrgency: existing[0].last_urgency });
     } else {
-      // New user
       await supabaseRequest('radar_users', 'POST', {
         email,
         project_name: projectName,
@@ -666,7 +649,6 @@ app.get('/check-user', async (req, res) => {
 
 // ─── Send Friday reminders (called by cron job) ────────────
 app.post('/send-reminders', async (req, res) => {
-  // Simple auth check — only allow calls with a secret key
   const secret = req.headers['x-reminder-secret'];
   if (secret !== process.env.REMINDER_SECRET) {
     return res.status(401).json({ error: 'Unauthorised' });
