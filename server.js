@@ -433,27 +433,28 @@ Respond ONLY with valid JSON. No markdown, no extra text:
 }`;
 
   try {
-    // ─── Gemini API call (replaces Anthropic) ────────────
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { maxOutputTokens: 2000 }
-        })
-      }
-    );
+    // ─── Groq API call ────────────────────────────────────
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        max_tokens: 2000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
 
     const data = await response.json();
 
     if (data.error) {
-      console.error('Gemini API error:', data.error);
-      return res.status(500).json({ error: 'Gemini API error', details: data.error });
+      console.error('Groq API error:', data.error);
+      return res.status(500).json({ error: 'Groq API error', details: data.error });
     }
 
-    const rawText = data.candidates[0].content.parts[0].text;
+    const rawText = data.choices[0].message.content;
     console.log('Raw AI response:', rawText.substring(0, 300));
 
     const text = rawText.replace(/```json|```/g, '').trim();
